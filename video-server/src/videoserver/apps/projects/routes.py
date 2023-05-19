@@ -3,9 +3,9 @@ import logging
 import os
 import re
 from datetime import datetime
-
+from flask import Response, current_app as app
+import subprocess
 import bson
-from flask import current_app as app
 from flask import request
 from pymongo import ReturnDocument
 from pymongo.errors import ServerSelectionTimeoutError
@@ -1334,7 +1334,182 @@ class GetRawTimelineThumbnail(MethodView):
             headers={'Content-Type': thumbnail['mimetype']}
         )
 
+class ChangeVideoSpeed(MethodView):
 
+    @property
+    def schema_edit(self):
+        return {
+            'trim': {
+                'required': False,
+                'regex': r'^\d+\.?\d*,\d+\.?\d*$',
+                'coerce': 'trim_to_dict',
+                'min_trim_start': 0,
+                'min_trim_end': 1
+            },
+            'rotate': {
+                'type': 'integer',
+                'required': False,
+                'allowed': [-270, -180, -90, 90, 180, 270]
+            },
+            'scale': {
+                'type': 'integer',
+                'min': app.config.get('MIN_VIDEO_WIDTH'),
+                'max': app.config.get('MAX_VIDEO_WIDTH'),
+                'required': False
+            },
+            'crop': {
+                'required': False,
+                'regex': r'^\d+,\d+,\d+,\d+$',
+                'coerce': 'crop_to_dict',
+                'allow_crop_width': [app.config.get('MIN_VIDEO_WIDTH'), app.config.get('MAX_VIDEO_WIDTH')],
+                'allow_crop_height': [app.config.get('MIN_VIDEO_HEIGHT'), app.config.get('MAX_VIDEO_HEIGHT')]
+            },
+            'speedup':{
+                'type': 'integer',
+                'required': False,
+                'allowed': [1, 2, 3]
+            }
+        }
+    def put(self, project_id):
+      """
+          Speed up video
+          ---
+          consumes:
+          - application/json
+          parameters:
+          - in: path
+            name: project_id
+            type: string
+            required: True
+            description: Unique project id
+          - in: body
+            name: action
+            description: Changes to apply for the video
+            required: True
+            schema:
+              type: object
+              properties:
+                speedup:
+                  type: integer
+                  example: 2
+          responses:
+            202:
+              description: Editing started
+              schema:
+                type: object
+                properties:
+                  processing:
+                    type: boolean
+                    example: True
+            409:
+              description: Previous editing was not finished yet
+              schema:
+                type: object
+                properties:
+                  processing:
+                    type: array
+                    example:
+                      - Task edit video is still processing
+          """
+
+      if self.project['processing']['video']:
+          raise Conflict({"processing": ["Task edit video is still processing"]})
+
+      if self.project['version'] == 1:
+          raise BadRequest({"project_id": ["Video with version 1 is not editable, use duplicated project instead."]})
+
+      request_json = request.get_json()
+      document = validate_document(
+          request_json if request_json else {},
+          self.schema_edit
+      )
+
+      if not document:
+          raise BadRequest({
+              'edit': [f"At least one of the edit rules is required. "
+                      f"Available edit rules are: {', '.join(self.schema_edit.keys())}"]
+          })
+      metadata = self.project['metadata']
+      # validate speed up
+      if 'speedup' in document:
+        """"""
+      # set processing flag
+      self.project = app.mongo.db.projects.find_one_and_update(
+          {'_id': self.project['_id']},
+          {'$set': {'processing.video': True}},
+          return_document=ReturnDocument.AFTER
+      )
+      logger.info(f"New project editing task was started. ID: {self.project['_id']}")
+      save_activity_log("EDIT", self.project['_id'], document)
+
+      # run task
+      edit_video.delay(
+          self.project,
+          changes=document
+      )
+
+      return json_response({"processing": True}, status=202)
+
+
+class ConvertToAudio(MethodView):
+
+    def post(self, project_id):
+        """
+        Convert to audio
+        ---
+        parameters:
+            - name: project_id
+              in: path
+              type: string
+              required: true
+              description: Unique project id
+        responses:
+          200:
+            description: Audio extracted successfully
+            content:
+              audio/mp3:
+                schema:
+                  type: string
+                  format: binary
+          404:
+            description: Project not found
+          409:
+            description: A running task has not completed
+            schema:
+              type: object
+              properties:
+                processing:
+                  type: array
+                  example:
+                    - Some tasks is still processing
+        """
+
+        project = app.mongo.db.projects.find_one({'_id': bson.ObjectId(project_id)})
+        if not project:
+            raise NotFound("Project not found")
+
+        if any(project['processing'].values()):
+            raise Conflict({"processing": ["Some tasks are still processing"]})
+        
+        app.mongo.db.projects.update_one({'_id': project['_id']}, {'$set': {'processing.video': True}})
+
+        try:
+            video_path = '../../video-server/src/videoserver/media/projects/' + self.project['storage_id']
+            audio_path = video_path.replace('.mp4', '.mp3')
+            # ffmpeg -i in.mp4 -q:a 0 -map a out.mp3
+            subprocess.call(['ffmpeg', '-i', video_path, '-q:a', '0', '-map', "a", audio_path])
+            with open(audio_path, 'rb') as f:
+                content = f.read()
+            app.mongo.db.projects.update_one({'_id': project['_id']}, {'$set': {'processing.video': False}})
+            response = Response(content_type='audio/mp3')
+            response.headers['Content-Disposition'] = f'attachment; filename={project["filename"].replace(".mp4", ".mp3")}'
+            response.set_data(content)
+            return response
+
+        except Exception as e:
+            app.mongo.db.projects.update_one({'_id': project['_id']}, {'$set': {'processing.video': False}})
+            raise InternalServerError(str(e))
+        
 # register all urls
 bp.add_url_rule(
     '/',
@@ -1343,6 +1518,14 @@ bp.add_url_rule(
 bp.add_url_rule(
     '/<project_id>',
     view_func=RetrieveEditDestroyProject.as_view('retrieve_edit_destroy_project')
+)
+bp.add_url_rule(
+    '/<project_id>/speedup',
+    view_func=ChangeVideoSpeed.as_view('speedup')
+)
+bp.add_url_rule(
+    '/<project_id>/convert/audio',
+    view_func=ConvertToAudio.as_view('Convert to audio')
 )
 bp.add_url_rule(
     '/<project_id>/duplicate',
