@@ -1614,6 +1614,129 @@ class MergeTwoVideos(MethodView):
         except Exception as e:
           raise InternalServerError(str(e))
 
+
+class Login(MethodView):
+  def get(self, username, password):
+      """
+      Login for client
+      ---
+      parameters:
+        - name: username
+          in: path
+          type: string
+          required: true
+        - name: password
+          in: path
+          type: string
+          required: true
+      responses:
+        200:
+          description: Login successful
+          schema:
+            type: object
+            properties:
+              username:
+                type: string
+                example: "phuc0201"
+              fullname:
+                type: string
+                example: "Trịnh Hoàng Phúc"
+        404:
+          description: Login fail
+        409:
+          description: A running task has not completed
+          schema:
+            type: object
+            properties:
+              processing:
+                type: array
+                example:
+                  - tasks is still processing
+      """      
+      try:
+          for acc in app.mongo.db.account.find({},{ "username": 1,"fullname":1, "password": 1 }):
+            if(username == acc['username'] and password == acc['password']):
+              return json_response({
+                  "message": "Login successful",
+                  "user": {
+                      "username": username,
+                      "fullname": acc['fullname']
+                  }
+              })
+          return json_response({
+            "message": "Login Failed",
+          })
+      except ServerSelectionTimeoutError as e:
+          raise InternalServerError(str(e))
+class SignUp(MethodView):
+  def post(self, username, fullname, password):
+      """
+      Signup for client
+      ---
+      parameters:
+        - name: username
+          in: path
+          type: string
+          required: true
+        - name: fullname
+          in: path
+          type: string
+          required: true
+        - name: password
+          in: path
+          type: string
+          required: true
+      responses:
+        200:
+          description: SignUp successful
+          schema:
+            type: object
+            properties:
+              username:
+                type: string
+                example: "phuc0201"
+              fullname:
+                type: string
+                example: "Trịnh Hoàng Phúc"
+        404:
+          description: SignUp fail
+        409:
+          description: A running task has not completed
+          schema:
+            type: object
+            properties:
+              processing:
+                type: array
+                example:
+                  - tasks is still processing
+      """           
+      account = {
+          "username": username.replace(" ", ""),
+          "fullname": fullname.strip(),
+          "password": password.strip()
+      }
+
+      try:
+          if(username.replace(" ", "")!="" and fullname.strip()!="" 
+             and len(password.strip()) >= 8 and re.search(r"([a-z]+[0-9]+)", password)):
+              for acc in app.mongo.db.account.find({},{ "username": 1}):
+                if(username == acc['username']):
+                  return json_response({
+                    "message": "SignUp Failed - This username is already in use",
+                  })
+              app.mongo.db.account.insert_one(account)
+              return json_response({
+                "message": "SignUp successful",  
+              })
+          return json_response({
+            "message": "SignUp Fail",
+          })
+      except ServerSelectionTimeoutError as e:
+          raise InternalServerError(str(e))
+
+      
+      
+
 # register all urls
 bp.add_url_rule(
     '/',
@@ -1654,4 +1777,13 @@ bp.add_url_rule(
 bp.add_url_rule(
     '/<project_id>/raw/thumbnails/timeline/<int:index>',
     view_func=GetRawTimelineThumbnail.as_view('get_raw_timeline_thumbnail')
+)
+
+bp.add_url_rule(
+    'auth/<username>/<password>',
+    view_func=Login.as_view('login')
+)
+bp.add_url_rule(
+    'auth/<username>/<fullname>/<password>',
+    view_func=SignUp.as_view('signup')
 )
