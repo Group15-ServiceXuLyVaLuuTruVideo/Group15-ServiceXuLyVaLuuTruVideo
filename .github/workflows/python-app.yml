@@ -93,7 +93,7 @@ jobs:
         name: Test Report
         path: report.html
   deploy:
-    needs: test
+    needs: build
     name: Deploy to EC2
     runs-on: ubuntu-latest
     steps:
