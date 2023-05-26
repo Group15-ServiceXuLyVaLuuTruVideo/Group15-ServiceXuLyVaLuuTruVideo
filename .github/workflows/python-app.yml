@@ -82,9 +82,13 @@ jobs:
         pip install -e video-server/[dev]
         pip install pytest==6.2.5
         pip install pytest-html
-
+  test: 
+    need: build
+    - name: Test with pytest
+      run: |
+        pytest
   deploy:
-    needs: build
+    needs: test
     name: Deploy to EC2
     runs-on: ubuntu-latest
     steps:

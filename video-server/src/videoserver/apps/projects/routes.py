@@ -21,6 +21,7 @@ from videoserver.lib.utils import (
 from . import bp
 from .tasks import edit_video, generate_preview_thumbnail, generate_timeline_thumbnails
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -1466,11 +1467,11 @@ class ConvertToAudio(MethodView):
             app.mongo.db.projects.update_one({'_id': project['_id']}, {'$set': {'processing.video': False}})
             raise InternalServerError(str(e))
         
-class ConvertToAVI(MethodView):
+class ConvertToMKV(MethodView):
     
     def post(self, project_id):
         """
-        Convert video to AVI format
+        Convert video to MKV format
         ---
         parameters:
             - name: project_id
@@ -1497,7 +1498,7 @@ class ConvertToAVI(MethodView):
                 processing:
                   type: array
                   example:
-                    - Some tasks is still processing
+                    - Tasks is still processing
         """
 
         # Check if project exists
@@ -1507,7 +1508,7 @@ class ConvertToAVI(MethodView):
 
         # Check if a task is already processing
         if any(project['processing'].values()):
-            raise Conflict({"processing": ["Some tasks are still processing"]})
+            raise Conflict({"processing": ["Tasks are still processing"]})
 
         # Update processing status
         app.mongo.db.projects.update_one({'_id': project['_id']}, {'$set': {'processing.video': True}})
@@ -1516,22 +1517,16 @@ class ConvertToAVI(MethodView):
             # Get video file path
             video_path = '../../video-server/src/videoserver/media/projects/' + self.project['storage_id']
 
-            # Convert video to AVI format
-            avi_path = video_path.replace('.mp4', '.avi')
-            subprocess.call(['ffmpeg', '-i', video_path, '-c:v', 'copy', '-c:a', 'copy', avi_path])
+            # Convert video to MKV format
+            MKV_path = video_path.replace('.mp4', '.mkv')
+            subprocess.call(['ffmpeg', '-i', video_path, '-c:v', 'copy', '-c:a', 'copy', MKV_path])
 
-            # Save AVI to storage
-            with open(avi_path, 'rb') as f:
+            with open(MKV_path, 'rb') as f:
                 content = f.read()
-            #avi_storage_id = app.fs.put(content=content, filename=project['filename'].replace('.mp4', '.avi'),
-            #                              project_id=project_id, content_type='video/x-msvideo')
-
-            # Update project with AVI storage ID
             app.mongo.db.projects.update_one({'_id': project['_id']}, {'$set': {'processing.video': False}})
 
-            # Return AVI file
             response = Response(content_type='video/x-msvideo')
-            response.headers['Content-Disposition'] = f'attachment; filename={project["filename"].replace(".mp4", ".avi")}'
+            response.headers['Content-Disposition'] = f'attachment; filename={project["filename"].replace(".mp4", ".mkv")}'
             response.set_data(content)
             return response
 
@@ -1733,9 +1728,7 @@ class SignUp(MethodView):
           })
       except ServerSelectionTimeoutError as e:
           raise InternalServerError(str(e))
-
-      
-      
+    
 
 # register all urls
 bp.add_url_rule(
@@ -1757,6 +1750,10 @@ bp.add_url_rule(
 bp.add_url_rule(
     '/<project_id>/convert/audio',
     view_func=ConvertToAudio.as_view('Convert to audio')
+)
+bp.add_url_rule(
+    '/<project_id>/convert/mkv',
+    view_func=ConvertToMKV.as_view("mp4 to mkv")
 )
 bp.add_url_rule(
     '/<project_id>/duplicate',
